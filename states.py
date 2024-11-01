@@ -118,25 +118,12 @@ def create_state_org_map(df, selected_state='All States'):
     state_counts = expanded_df['State'].value_counts()
     
     # Create a color scale based on unique organizations
-    unique_orgs = df['Organization'].unique()  # Use original df to ensure consistent colors
+    unique_orgs = sorted(df['Organization'].unique())  # Sort for consistent colors
     colors = px.colors.qualitative.Set3[:len(unique_orgs)]
     org_colors = dict(zip(unique_orgs, colors))
     
-    # Add legend entries (only once per organization)
-    for org in unique_orgs:
-        fig.add_trace(go.Scattergeo(
-            locationmode='USA-states',
-            lon=[None],
-            lat=[None],
-            mode='markers',
-            marker=dict(
-                size=12,
-                color=org_colors[org],
-                line=dict(width=1, color='black')
-            ),
-            name=org,
-            showlegend=True
-        ))
+    # Track which organizations we've seen for legend purposes
+    orgs_in_legend = set()
     
     # Add points for each organization, with larger position adjustments for overlap
     for state in state_counts.index:
@@ -151,6 +138,12 @@ def create_state_org_map(df, selected_state='All States'):
             adj_lat = org_row['lat'] + offset * np.sin(angle)
             adj_lon = org_row['lon'] + offset * np.cos(angle)
             
+            # Determine if this should be in legend
+            org = org_row['Organization']
+            show_in_legend = org not in orgs_in_legend
+            if show_in_legend:
+                orgs_in_legend.add(org)
+            
             fig.add_trace(go.Scattergeo(
                 locationmode='USA-states',
                 lon=[adj_lon],
@@ -158,7 +151,7 @@ def create_state_org_map(df, selected_state='All States'):
                 mode='markers+text',
                 marker=dict(
                     size=12,
-                    color=org_colors[org_row['Organization']],
+                    color=org_colors[org],
                     line=dict(width=1, color='black')
                 ),
                 text=org_row['Organization'],
@@ -166,7 +159,7 @@ def create_state_org_map(df, selected_state='All States'):
                 name=org_row['Organization'],
                 hovertext=f"{org_row['Organization']}<br>{org_row['State']}<br>{org_row['Description']}",
                 hoverinfo='text',
-                showlegend=False  # Don't show in legend to avoid duplicates
+                showlegend=show_in_legend
             ))
     
     # Update layout for larger map
