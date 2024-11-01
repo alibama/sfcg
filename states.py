@@ -5,11 +5,9 @@ import plotly.graph_objects as go
 import numpy as np
 import re
 from collections import defaultdict
-import json
 
 # Configure page layout to be wider
 st.set_page_config(layout="wide")
-
 
 # State coordinates for mapping
 STATE_COORDS = {
@@ -32,137 +30,121 @@ STATE_COORDS = {
     'WI': (44.6243, -89.9941), 'WY': (42.9957, -107.5512)
 }
 
-def extract_states(text):
-    """Extract state abbreviations from text."""
-    state_abbrevs = {
-        'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
-        'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
-        'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
-        'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
-        'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'
-    }
-    
-    found_states = set()
-    for state in state_abbrevs:
-        if re.search(r'\b' + state + r'\b', text):
-            found_states.add(state)
-    
-    return list(found_states)
+def find_states_in_text(text):
+    """Find all state abbreviations in text."""
+    pattern = r'\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\b'
+    return re.findall(pattern, text)
 
-def extract_organization(text):
-    """Extract organization name from the beginning of a bullet point."""
-    match = re.search(r'^\s*\*?\s*([^()]+?)(?:\s*\([^)]+\))?(?=\s+(?:is|has|have|works|working|connects|recruiting|mobilized|organized))', text)
-    if match:
-        return match.group(1).strip()
+def extract_organization_and_states(text):
+    """Extract organization name and states from a line of text."""
+    # Clean the text
+    text = text.strip('* \t')
+    
+    # Find all states
+    states = find_states_in_text(text)
+    
+    # Extract organization name - look for text before the first parenthesis or action verb
+    org_pattern = r'^([^()]+?)(?=\s*[\(]|\s+(?:is|has|have|works|working|connects|recruiting|mobilized|organized))'
+    org_match = re.search(org_pattern, text)
+    
+    if org_match and states:
+        return {
+            'Organization': org_match.group(1).strip(),
+            'States': ', '.join(sorted(set(states))),
+            'Description': text
+        }
     return None
 
-def process_text(raw_text):
+def process_text(text):
     """Process raw text into structured data."""
-    organizations = []
-    states = []
-    descriptions = []
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    data = []
     
-    lines = raw_text.split('\n')
     for line in lines:
-        line = line.strip()
-        if line.startswith('*') or line != '':
-            org = extract_organization(line)
-            if org:
-                state_list = extract_states(line)
-                if state_list:
-                    organizations.append(org)
-                    states.append(', '.join(state_list))
-                    descriptions.append(line.strip('* '))
+        result = extract_organization_and_states(line)
+        if result:
+            data.append(result)
+    
+    return pd.DataFrame(data)
 
-    return pd.DataFrame({
-        'Organization': organizations,
-        'States': states,
-        'Description': descriptions
-    })
-def create_state_org_map(df, selected_state='All States'):
-    """Create an interactive map showing organizations by state."""
-    # Expand the states data
-    expanded_data = []
-    for _, row in df.iterrows():
-        states = [s.strip() for s in row['States'].split(',')]
-        for state in states:
-            if state in STATE_COORDS:
-                expanded_data.append({
-                    'Organization': row['Organization'],
-                    'State': state,
-                    'Description': row['Description'],
-                    'lat': STATE_COORDS[state][0],
-                    'lon': STATE_COORDS[state][1]
-                })
-    
-    expanded_df = pd.DataFrame(expanded_data)
-    
-    # Filter based on selected state
-    if selected_state != 'All States':
-        expanded_df = expanded_df[expanded_df['State'] == selected_state]
-    
-    # Create base map
+def create_visualization(df, selected_state='All States'):
+    """Create the map visualization."""
     fig = go.Figure()
     
-    # Add US state boundaries
+    # Add base US map
     fig.add_trace(go.Scattergeo(
         locationmode='USA-states',
-        lon=[STATE_COORDS[state][1] for state in STATE_COORDS],
-        lat=[STATE_COORDS[state][0] for state in STATE_COORDS],
+        lon=[coord[1] for coord in STATE_COORDS.values()],
+        lat=[coord[0] for coord in STATE_COORDS.values()],
         mode='markers',
         marker=dict(size=1, color='gray'),
         showlegend=False
     ))
     
-    # Calculate number of organizations per state
-    state_counts = expanded_df['State'].value_counts()
+    # Prepare data for visualization
+    plot_data = []
+    for _, row in df.iterrows():
+        states = [s.strip() for s in row['States'].split(',')]
+        for state in states:
+            if state in STATE_COORDS:
+                plot_data.append({
+                    'Organization': row['Organization'],
+                    'State': state,
+                    'Description': row['Description'],
+                    'Coords': STATE_COORDS[state]
+                })
     
-    # Create a color scale based on unique organizations
-    unique_orgs = sorted(df['Organization'].unique())  # Sort for consistent colors
+    # Group by state for point spreading
+    state_groups = defaultdict(list)
+    for item in plot_data:
+        state_groups[item['State']].append(item)
+    
+    # Create color mapping for organizations
+    unique_orgs = sorted(df['Organization'].unique())
     colors = px.colors.qualitative.Set3[:len(unique_orgs)]
-    org_colors = dict(zip(unique_orgs, colors))
+    color_map = dict(zip(unique_orgs, colors))
     
-    # Track which organizations we've seen for legend purposes
-    orgs_in_legend = set()
+    # Track organizations already in legend
+    legend_entries = set()
     
-    # Add points for each organization, with larger position adjustments for overlap
-    for state in state_counts.index:
-        state_data = expanded_df[expanded_df['State'] == state]
-        n_orgs = len(state_data)
-        
-        # Calculate positions in a circular pattern
-        for i, (_, org_row) in enumerate(state_data.iterrows()):
-            # Create a larger offset in a circular pattern
-            angle = (2 * np.pi * i) / n_orgs
-            offset = 0.5  # Increased offset for more spread
-            adj_lat = org_row['lat'] + offset * np.sin(angle)
-            adj_lon = org_row['lon'] + offset * np.cos(angle)
+    # Plot points with spread for overlapping locations
+    for state, items in state_groups.items():
+        if selected_state != 'All States' and state != selected_state:
+            continue
             
-            # Determine if this should be in legend
-            org = org_row['Organization']
-            show_in_legend = org not in orgs_in_legend
+        n_items = len(items)
+        for i, item in enumerate(items):
+            # Calculate spread position
+            angle = (2 * np.pi * i) / n_items
+            spread = 0.7  # Increased spread
+            base_lat, base_lon = item['Coords']
+            adj_lat = base_lat + spread * np.sin(angle)
+            adj_lon = base_lon + spread * np.cos(angle)
+            
+            # Determine if this organization should be in legend
+            show_in_legend = item['Organization'] not in legend_entries
             if show_in_legend:
-                orgs_in_legend.add(org)
+                legend_entries.add(item['Organization'])
             
+            # Add point to map
             fig.add_trace(go.Scattergeo(
-                locationmode='USA-states',
                 lon=[adj_lon],
                 lat=[adj_lat],
                 mode='markers+text',
+                text=item['Organization'],
+                textposition='top center',
                 marker=dict(
                     size=12,
-                    color=org_colors[org],
+                    color=color_map[item['Organization']],
                     line=dict(width=1, color='black')
                 ),
-                text=org_row['Organization'],
-                textposition="top center",
-                name=org_row['Organization'],
-                hovertext=f"{org_row['Organization']}<br>{org_row['State']}<br>{org_row['Description']}",
+                name=item['Organization'],
+                hovertext=f"{item['Organization']}<br>{item['State']}<br>{item['Description']}",
                 hoverinfo='text',
                 showlegend=show_in_legend
             ))
     
-    # Update layout for larger map
+    # Update layout
     fig.update_layout(
         geo=dict(
             scope='usa',
@@ -170,8 +152,8 @@ def create_state_org_map(df, selected_state='All States'):
             showland=True,
             landcolor='rgb(240, 240, 240)',
             countrycolor='rgb(204, 204, 204)',
-            center=dict(lat=39.5, lon=-98.35),  # Center of US
-            projection_scale=1.2  # Adjust this value to zoom level
+            center=dict(lat=39.5, lon=-98.35),
+            projection_scale=1.2
         ),
         showlegend=True,
         legend=dict(
@@ -181,8 +163,8 @@ def create_state_org_map(df, selected_state='All States'):
             x=0.99,
             bgcolor="rgba(255, 255, 255, 0.8)"
         ),
-        height=800,  # Increased height
-        margin=dict(l=0, r=0, t=0, b=0),  # Removed margins for maximum space
+        height=800,
+        margin=dict(l=0, r=0, t=0, b=0)
     )
     
     return fig
@@ -190,8 +172,9 @@ def create_state_org_map(df, selected_state='All States'):
 # Streamlit UI
 st.title('Organization-State Network Analyzer')
 
-# Text input area in a smaller container
+# Input and controls
 col1, col2 = st.columns([2, 1])
+
 with col1:
     text_input = st.text_area(
         "Paste your content here:",
@@ -203,23 +186,21 @@ if text_input:
     # Process the text
     df = process_text(text_input)
     
-    # Create a list of all unique states
+    # Get unique states
     all_states = set()
     for state_list in df['States']:
         all_states.update([s.strip() for s in state_list.split(',')])
     
-    # State filter dropdown in the second column
+    # Controls and stats
     with col2:
         selected_state = st.selectbox(
             'Filter by State:',
             ['All States'] + sorted(list(all_states))
         )
         
-        # Display statistics
         st.metric('Total Organizations', len(df))
         st.metric('Total States', len(all_states))
         
-        # Download button for CSV
         csv = df.to_csv(index=False)
         st.download_button(
             label="Download data as CSV",
@@ -228,10 +209,10 @@ if text_input:
             mime="text/csv"
         )
     
-    # Create and display the map (full width)
-    st.plotly_chart(create_state_org_map(df, selected_state), use_container_width=True)
+    # Show visualization
+    st.plotly_chart(create_visualization(df, selected_state), use_container_width=True)
     
-    # Display the filtered dataframe
+    # Show data table
     if selected_state != 'All States':
         filtered_df = df[df['States'].str.contains(selected_state)]
     else:
