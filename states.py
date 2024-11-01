@@ -7,6 +7,9 @@ import re
 from collections import defaultdict
 import json
 
+# Configure page layout to be wider
+st.set_page_config(layout="wide")
+
 
 # State coordinates for mapping
 STATE_COORDS = {
@@ -76,7 +79,6 @@ def process_text(raw_text):
         'States': states,
         'Description': descriptions
     })
-
 def create_state_org_map(df, selected_state='All States'):
     """Create an interactive map showing organizations by state."""
     # Expand the states data
@@ -116,20 +118,36 @@ def create_state_org_map(df, selected_state='All States'):
     state_counts = expanded_df['State'].value_counts()
     
     # Create a color scale based on unique organizations
-    unique_orgs = expanded_df['Organization'].unique()
+    unique_orgs = df['Organization'].unique()  # Use original df to ensure consistent colors
     colors = px.colors.qualitative.Set3[:len(unique_orgs)]
     org_colors = dict(zip(unique_orgs, colors))
     
-    # Add points for each organization, with slight position adjustments for overlap
+    # Add legend entries (only once per organization)
+    for org in unique_orgs:
+        fig.add_trace(go.Scattergeo(
+            locationmode='USA-states',
+            lon=[None],
+            lat=[None],
+            mode='markers',
+            marker=dict(
+                size=12,
+                color=org_colors[org],
+                line=dict(width=1, color='black')
+            ),
+            name=org,
+            showlegend=True
+        ))
+    
+    # Add points for each organization, with larger position adjustments for overlap
     for state in state_counts.index:
         state_data = expanded_df[expanded_df['State'] == state]
         n_orgs = len(state_data)
         
         # Calculate positions in a circular pattern
         for i, (_, org_row) in enumerate(state_data.iterrows()):
-            # Create a small offset in a circular pattern
+            # Create a larger offset in a circular pattern
             angle = (2 * np.pi * i) / n_orgs
-            offset = 0.3  # Adjust this value to control the spread of points
+            offset = 0.5  # Increased offset for more spread
             adj_lat = org_row['lat'] + offset * np.sin(angle)
             adj_lon = org_row['lon'] + offset * np.cos(angle)
             
@@ -147,10 +165,11 @@ def create_state_org_map(df, selected_state='All States'):
                 textposition="top center",
                 name=org_row['Organization'],
                 hovertext=f"{org_row['Organization']}<br>{org_row['State']}<br>{org_row['Description']}",
-                hoverinfo='text'
+                hoverinfo='text',
+                showlegend=False  # Don't show in legend to avoid duplicates
             ))
     
-    # Update layout
+    # Update layout for larger map
     fig.update_layout(
         geo=dict(
             scope='usa',
@@ -158,15 +177,19 @@ def create_state_org_map(df, selected_state='All States'):
             showland=True,
             landcolor='rgb(240, 240, 240)',
             countrycolor='rgb(204, 204, 204)',
+            center=dict(lat=39.5, lon=-98.35),  # Center of US
+            projection_scale=1.2  # Adjust this value to zoom level
         ),
         showlegend=True,
-        height=600,
-        margin=dict(l=0, r=0, t=30, b=0),
-        title=dict(
-            text='Organizations by State',
-            x=0.5,
-            y=0.95
-        )
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
+            bgcolor="rgba(255, 255, 255, 0.8)"
+        ),
+        height=800,  # Increased height
+        margin=dict(l=0, r=0, t=0, b=0),  # Removed margins for maximum space
     )
     
     return fig
@@ -174,12 +197,14 @@ def create_state_org_map(df, selected_state='All States'):
 # Streamlit UI
 st.title('Organization-State Network Analyzer')
 
-# Text input area
-text_input = st.text_area(
-    "Paste your content here:",
-    height=300,
-    help="Paste the text containing organization and state information."
-)
+# Text input area in a smaller container
+col1, col2 = st.columns([2, 1])
+with col1:
+    text_input = st.text_area(
+        "Paste your content here:",
+        height=200,
+        help="Paste the text containing organization and state information."
+    )
 
 if text_input:
     # Process the text
@@ -190,38 +215,34 @@ if text_input:
     for state_list in df['States']:
         all_states.update([s.strip() for s in state_list.split(',')])
     
-    # State filter dropdown
-    selected_state = st.selectbox(
-        'Filter by State:',
-        ['All States'] + sorted(list(all_states))
-    )
+    # State filter dropdown in the second column
+    with col2:
+        selected_state = st.selectbox(
+            'Filter by State:',
+            ['All States'] + sorted(list(all_states))
+        )
+        
+        # Display statistics
+        st.metric('Total Organizations', len(df))
+        st.metric('Total States', len(all_states))
+        
+        # Download button for CSV
+        csv = df.to_csv(index=False)
+        st.download_button(
+            label="Download data as CSV",
+            data=csv,
+            file_name="organization_state_data.csv",
+            mime="text/csv"
+        )
     
-    # Filter the dataframe based on selected state
+    # Create and display the map (full width)
+    st.plotly_chart(create_state_org_map(df, selected_state), use_container_width=True)
+    
+    # Display the filtered dataframe
     if selected_state != 'All States':
         filtered_df = df[df['States'].str.contains(selected_state)]
     else:
         filtered_df = df
     
-    # Create and display the map
-    st.plotly_chart(create_state_org_map(df, selected_state), use_container_width=True)
-    
-    # Display the filtered dataframe
     st.subheader('Analyzed Data')
     st.dataframe(filtered_df)
-    
-    # Display some statistics
-    st.subheader('Summary Statistics')
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric('Total Organizations', len(df))
-    with col2:
-        st.metric('Total States', len(all_states))
-    
-    # Download button for CSV
-    csv = filtered_df.to_csv(index=False)
-    st.download_button(
-        label="Download data as CSV",
-        data=csv,
-        file_name="organization_state_data.csv",
-        mime="text/csv"
-    )
